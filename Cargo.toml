@@ -1,0 +1,18 @@
+[package]
+name = "cetra-program-test"
+version = "0.1.0"
+edition = "2021"
+description = ""
+readme = "README.md"
+authors = ["Cetra Finance"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+solana-program-test = "1.9.18"
+solana-client = "1.9.18"
+solana-program = "1.9.18"
+solana-sdk = "1.9.18"
+serde_json = "1.0.83"
+serde = { version = "1.0.142", features = ["derive"] }
+async-trait = "0.1.57"
