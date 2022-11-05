@@ -45,7 +45,7 @@ impl TestContext {
                 .await?;
 
             if maybe_account.is_none() {
-                undefined_accounts.push(account_pubkey.to_bytes());
+                undefined_accounts.push(*account_pubkey);
             }
         }
 
@@ -55,51 +55,29 @@ impl TestContext {
             .await?;
 
         let account_path = Path::new(&self.fixtures_path);
-
         for (maybe_loaded_account, pubkey) in maybe_loaded_accounts.iter().zip(&undefined_accounts)
         {
-            let pubkey = Pubkey::new_from_array(*pubkey);
-
-            if let Some((lamports, data, owner, executable, rent_epoch)) = maybe_loaded_account {
-                let account = Account {
-                    lamports: *lamports,
-                    data: data.clone(),
-                    owner: Pubkey::new_from_array(*owner),
-                    executable: *executable,
-                    rent_epoch: *rent_epoch,
-                };
-
+            if let Some(account) = maybe_loaded_account {
                 if account.executable {
                     let (program_pubkey, _) = Pubkey::find_program_address(
                         &[pubkey.as_ref()],
                         &bpf_loader_upgradeable::id(),
                     );
 
-                    let program_pubkey_bytes = program_pubkey.to_bytes();
-
                     let mut program_file =
                         File::create(account_path.join(format!("{}.bin", program_pubkey)))?;
 
-                    let maybe_program = self
+                    let program_account = self
                         .accounts_loader_impl
-                        .get_accounts(&vec![program_pubkey_bytes])
+                        .get_accounts(&vec![program_pubkey])
                         .await?[0]
-                        .clone();
+                        .clone()
+                        .expect("Unexpected invalid program buffer!");
 
-                    if let Some((lamports, data, owner, executable, rent_epoch)) = maybe_program {
-                        let program_account = Account {
-                            lamports,
-                            data,
-                            owner: Pubkey::new_from_array(owner),
-                            executable,
-                            rent_epoch,
-                        };
+                    program_file.write_all(&program_account.data)?;
 
-                        program_file.write_all(&program_account.data)?;
-
-                        self.context
-                            .set_account(&program_pubkey, &program_account.into());
-                    }
+                    self.context
+                        .set_account(&program_pubkey, &program_account.into());
                 }
 
                 let mut account_file = File::create(account_path.join(format!("{}.json", pubkey)))?;
@@ -111,7 +89,7 @@ impl TestContext {
                     .as_bytes(),
                 )?;
 
-                self.context.set_account(&pubkey, &account.into());
+                self.context.set_account(pubkey, &account.clone().into());
             }
         }
 

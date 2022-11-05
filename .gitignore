@@ -1,2 +1,7 @@
+# Cargo defaults
 /target
 /Cargo.lock
+
+# Env
+fixtures/
+.DS_Store

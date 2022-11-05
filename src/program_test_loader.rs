@@ -1,10 +1,11 @@
 use super::{AccountsLoader, FixtureAccountWrapper, TestContext};
 use solana_program_test::ProgramTest;
-use solana_sdk::{account::Account, bpf_loader, pubkey::Pubkey, rent::Rent};
+use solana_sdk::{account::Account, bpf_loader_upgradeable, pubkey::Pubkey, rent::Rent};
 use std::{
     error::Error,
     fs::{create_dir_all, read_dir, File},
     io::Read,
+    path::Path,
     str::FromStr,
 };
 
@@ -30,43 +31,44 @@ impl ProgramTestLoader {
         };
 
         for dir_entry in active_dir.flatten() {
-            let mut file_path = dir_entry.path();
-            file_path.set_extension("");
-            let file_name = file_path
-                .file_name()
-                .expect("Unable obtain file name")
-                .to_str()
-                .expect("Unable convert file name to string")
-                .to_string();
-
             let mut account_file = File::open(dir_entry.path())?;
             let mut buffer = Vec::new();
             account_file.read_to_end(&mut buffer)?;
 
-            let fixture_account: FixtureAccountWrapper = match serde_json::from_slice(&buffer) {
-                Ok(account) => account,
-                Err(_) => {
-                    let pubkey = Pubkey::from_str(&file_name)?;
+            match serde_json::from_slice::<FixtureAccountWrapper>(&buffer) {
+                Ok(account_wrapper) => {
+                    let account_pubkey = Pubkey::from_str(&account_wrapper.pubkey)?;
+                    let account: Account = account_wrapper.account.into();
 
-                    self.program_test.add_account(
-                        pubkey,
-                        Account {
-                            lamports: Rent::default().minimum_balance(buffer.len()).min(1),
-                            data: buffer,
-                            owner: bpf_loader::id(),
-                            executable: true,
-                            rent_epoch: 0,
-                        },
-                    );
+                    self.program_test
+                        .add_account(account_pubkey, account.clone());
 
-                    continue;
+                    if account.executable {
+                        let (program_pubkey, _) = Pubkey::find_program_address(
+                            &[account_pubkey.as_ref()],
+                            &bpf_loader_upgradeable::id(),
+                        );
+
+                        let program_path = Path::new(&self.fixtures_path);
+                        let mut program_file =
+                            File::open(program_path.join(format!("{}.bin", program_pubkey)))?;
+                        let mut program_buffer = Vec::new();
+                        program_file.read_to_end(&mut program_buffer)?;
+
+                        self.program_test.add_account(
+                            program_pubkey,
+                            Account {
+                                lamports: Rent::default().minimum_balance(buffer.len()).min(1),
+                                data: program_buffer,
+                                owner: bpf_loader_upgradeable::id(),
+                                executable: false,
+                                rent_epoch: u64::MAX,
+                            },
+                        );
+                    }
                 }
+                Err(_) => continue,
             };
-
-            self.program_test.add_account(
-                Pubkey::from_str(&fixture_account.pubkey)?,
-                fixture_account.account.into(),
-            );
         }
 
         Ok(())
