@@ -1,7 +1,6 @@
-use std::str::FromStr;
-
 use serde::{Deserialize, Serialize};
 use solana_sdk::{account::Account, pubkey::Pubkey};
+use std::str::FromStr;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -3,6 +3,7 @@ mod fixture_account;
 mod program_test_loader;
 mod rpc_accounts_loader;
 mod test_context;
+pub mod tokens;
 
 pub use accounts_loader::*;
 pub use fixture_account::*;

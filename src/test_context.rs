@@ -2,7 +2,8 @@ use super::{AccountsLoader, FixtureAccountWrapper};
 use solana_program_test::ProgramTestContext;
 use solana_sdk::{
     account::Account, bpf_loader_upgradeable, clock::Clock, commitment_config::CommitmentLevel,
-    pubkey::Pubkey, rent::Rent, transaction::Transaction, transport,
+    program_option::COption, program_pack::Pack, pubkey::Pubkey, rent::Rent,
+    transaction::Transaction, transport,
 };
 use std::{
     error::Error,
@@ -94,6 +95,113 @@ impl TestContext {
         }
 
         Ok(())
+    }
+
+    /// Creates associated token account for `wallet` with provided `amount`,
+    /// and `token_mint`.
+    pub async fn create_ata(
+        &mut self,
+        wallet: &Pubkey,
+        token_mint: &Pubkey,
+        amount: u64,
+    ) -> transport::Result<()> {
+        let wallet_ata =
+            spl_associated_token_account::get_associated_token_address(wallet, token_mint);
+
+        let rent = self.get_rent().await;
+        let rent_exempt_lamports = rent.minimum_balance(spl_token::state::Account::LEN);
+
+        let (is_native, amount) = if token_mint == &spl_token::native_mint::id() {
+            (
+                COption::Some(rent_exempt_lamports),
+                amount + rent_exempt_lamports,
+            )
+        } else {
+            (COption::None, amount)
+        };
+
+        let account_data = spl_token::state::Account {
+            mint: *token_mint,
+            owner: *wallet,
+            amount,
+            delegate: COption::None,
+            state: spl_token::state::AccountState::Initialized,
+            is_native,
+            delegated_amount: 0,
+            close_authority: COption::None,
+        };
+        let mut account_buffer = Vec::new();
+        account_buffer.resize(spl_token::state::Account::LEN, 0);
+        account_data.pack_into_slice(&mut account_buffer);
+
+        self.context.set_account(
+            &wallet_ata,
+            &Account {
+                lamports: rent_exempt_lamports,
+                data: account_buffer,
+                owner: spl_token::ID,
+                executable: false,
+                rent_epoch: u64::MAX,
+            }
+            .into(),
+        );
+
+        Ok(())
+    }
+
+    /// Adds `amount` of `token_mint` tokens for `wallet` associated token account.
+    pub async fn add_ata_tokens(
+        &mut self,
+        wallet: &Pubkey,
+        token_mint: &Pubkey,
+        amount: u64,
+    ) -> transport::Result<()> {
+        let wallet_ata =
+            spl_associated_token_account::get_associated_token_address(wallet, token_mint);
+
+        let maybe_account = self.context.banks_client.get_account(wallet_ata).await?;
+        if let Some(mut account) = maybe_account {
+            let mut ata = spl_token::state::Account::unpack(&account.data)
+                .expect("Unable to unpack spl token account!");
+            ata.amount += amount;
+
+            let mut ata_buffer = Vec::new();
+            ata_buffer.resize(spl_token::state::Account::LEN, 0);
+            ata.pack_into_slice(&mut ata_buffer);
+
+            account.data = ata_buffer;
+
+            self.context.set_account(&wallet_ata, &account.into())
+        } else {
+            return Err(transport::TransportError::Custom(
+                "Associated token account not found!".to_string(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Returns [balance](`spl_token::state::Account::amount`) of `wallet` associated token account for `token_mint`.
+    pub async fn get_ata_balance(
+        &mut self,
+        wallet: &Pubkey,
+        token_mint: &Pubkey,
+    ) -> transport::Result<u64> {
+        let wallet_ata =
+            spl_associated_token_account::get_associated_token_address(wallet, token_mint);
+
+        let maybe_account = self.context.banks_client.get_account(wallet_ata).await?;
+        let amount = if let Some(account) = maybe_account {
+            let ata = spl_token::state::Account::unpack(&account.data)
+                .expect("Unable to unpack spl token account!");
+            ata.amount
+        } else {
+            return Err(transport::TransportError::Custom(
+                "Associated token account not found!".to_string(),
+            ));
+        };
+
+        Ok(amount)
     }
 
     pub async fn get_account(&mut self, address: &Pubkey) -> io::Result<Option<Account>> {

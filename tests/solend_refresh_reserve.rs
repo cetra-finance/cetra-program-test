@@ -1,6 +1,5 @@
 use cetra_program_test::{solana_program_test::*, *};
-use solana_program::program_pack::Pack;
-use solana_sdk::{pubkey::Pubkey, signer::Signer, transaction::Transaction};
+use solana_sdk::{program_pack::Pack, pubkey::Pubkey, signer::Signer, transaction::Transaction};
 use std::str::FromStr;
 
 #[tokio::test(flavor = "multi_thread")]
