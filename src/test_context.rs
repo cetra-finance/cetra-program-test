@@ -2,8 +2,8 @@ use super::{AccountsLoader, FixtureAccountWrapper};
 use solana_program_test::ProgramTestContext;
 use solana_sdk::{
     account::Account, bpf_loader_upgradeable, clock::Clock, commitment_config::CommitmentLevel,
-    program_option::COption, program_pack::Pack, pubkey::Pubkey, rent::Rent,
-    transaction::Transaction, transport,
+    program_option::COption, program_pack::Pack, pubkey::Pubkey, rent::Rent, signer::Signer,
+    system_instruction, transaction::Transaction, transport,
 };
 use std::{
     error::Error,
@@ -111,42 +111,53 @@ impl TestContext {
         let rent = self.get_rent().await;
         let rent_exempt_lamports = rent.minimum_balance(spl_token::state::Account::LEN);
 
-        let (is_native, amount) = if token_mint == &spl_token::native_mint::id() {
-            (
-                COption::Some(rent_exempt_lamports),
-                amount + rent_exempt_lamports,
-            )
+        if token_mint == &spl_token::native_mint::id() {
+            let tx = Transaction::new_signed_with_payer(
+                &[
+                    spl_associated_token_account::create_associated_token_account(
+                        &self.context.payer.pubkey(),
+                        wallet,
+                        token_mint,
+                    ),
+                    system_instruction::transfer(&self.context.payer.pubkey(), &wallet_ata, amount),
+                    spl_token::instruction::sync_native(&spl_token::id(), &wallet_ata)
+                        .expect("Failed to create `spl_token` instruction!"),
+                ],
+                Some(&self.context.payer.pubkey()),
+                &[&self.context.payer],
+                self.context.last_blockhash,
+            );
+
+            self.context.banks_client.process_transaction(tx).await
         } else {
-            (COption::None, amount)
-        };
+            let account_data = spl_token::state::Account {
+                mint: *token_mint,
+                owner: *wallet,
+                amount,
+                delegate: COption::None,
+                state: spl_token::state::AccountState::Initialized,
+                is_native: COption::None,
+                delegated_amount: 0,
+                close_authority: COption::None,
+            };
+            let mut account_buffer = Vec::new();
+            account_buffer.resize(spl_token::state::Account::LEN, 0);
+            account_data.pack_into_slice(&mut account_buffer);
 
-        let account_data = spl_token::state::Account {
-            mint: *token_mint,
-            owner: *wallet,
-            amount,
-            delegate: COption::None,
-            state: spl_token::state::AccountState::Initialized,
-            is_native,
-            delegated_amount: 0,
-            close_authority: COption::None,
-        };
-        let mut account_buffer = Vec::new();
-        account_buffer.resize(spl_token::state::Account::LEN, 0);
-        account_data.pack_into_slice(&mut account_buffer);
+            self.context.set_account(
+                &wallet_ata,
+                &Account {
+                    lamports: rent_exempt_lamports,
+                    data: account_buffer,
+                    owner: spl_token::ID,
+                    executable: false,
+                    rent_epoch: u64::MAX,
+                }
+                .into(),
+            );
 
-        self.context.set_account(
-            &wallet_ata,
-            &Account {
-                lamports: rent_exempt_lamports,
-                data: account_buffer,
-                owner: spl_token::ID,
-                executable: false,
-                rent_epoch: u64::MAX,
-            }
-            .into(),
-        );
-
-        Ok(())
+            Ok(())
+        }
     }
 
     /// Adds `amount` of `token_mint` tokens for `wallet` associated token account.
@@ -163,15 +174,35 @@ impl TestContext {
         if let Some(mut account) = maybe_account {
             let mut ata = spl_token::state::Account::unpack(&account.data)
                 .expect("Unable to unpack spl token account!");
-            ata.amount += amount;
 
-            let mut ata_buffer = Vec::new();
-            ata_buffer.resize(spl_token::state::Account::LEN, 0);
-            ata.pack_into_slice(&mut ata_buffer);
+            if ata.is_native() {
+                let tx = Transaction::new_signed_with_payer(
+                    &[
+                        system_instruction::transfer(
+                            &self.context.payer.pubkey(),
+                            &wallet_ata,
+                            amount,
+                        ),
+                        spl_token::instruction::sync_native(&spl_token::id(), &wallet_ata)
+                            .expect("Failed to create `spl_token` instruction!"),
+                    ],
+                    Some(&self.context.payer.pubkey()),
+                    &[&self.context.payer],
+                    self.context.last_blockhash,
+                );
 
-            account.data = ata_buffer;
+                self.context.banks_client.process_transaction(tx).await?
+            } else {
+                ata.amount += amount;
 
-            self.context.set_account(&wallet_ata, &account.into())
+                let mut ata_buffer = Vec::new();
+                ata_buffer.resize(spl_token::state::Account::LEN, 0);
+                ata.pack_into_slice(&mut ata_buffer);
+
+                account.data = ata_buffer;
+
+                self.context.set_account(&wallet_ata, &account.into())
+            }
         } else {
             return Err(transport::TransportError::Custom(
                 "Associated token account not found!".to_string(),
